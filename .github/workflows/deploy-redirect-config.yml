@@ -27,9 +27,10 @@ permissions:
 
 env:
   AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
-  CONFIG_PATH: ${{ inputs.config_path || vars.REDIRECT_CONFIG_PATH || 'examples/redirects.conf' }}
+  CONFIG_PATH: ${{ github.event.inputs.config_path || vars.REDIRECT_CONFIG_PATH || 'examples/redirects.conf' }}
   S3_BUCKET: ${{ vars.REDIRECT_CONFIG_BUCKET }}
-  S3_KEY: ${{ inputs.s3_key || vars.REDIRECT_CONFIG_KEY || 'redirects.conf' }}
+  S3_KEY: ${{ github.event.inputs.s3_key || vars.REDIRECT_CONFIG_KEY || 'redirects.conf' }}
+  AWS_ROLE_TO_ASSUME: ${{ secrets.AWS_ROLE_TO_ASSUME }}
 
 jobs:
   validate-and-upload:
@@ -55,7 +56,7 @@ jobs:
             echo "::error::Set repository variable REDIRECT_CONFIG_BUCKET to the S3 config bucket name."
             exit 1
           fi
-          if [ -z "${{ secrets.AWS_ROLE_TO_ASSUME }}" ]; then
+          if [ -z "$AWS_ROLE_TO_ASSUME" ]; then
             echo "::error::Set repository secret AWS_ROLE_TO_ASSUME to the GitHub OIDC deploy role ARN."
             exit 1
           fi
@@ -64,10 +65,12 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-to-assume: ${{ env.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Upload redirect config to S3
         run: |
-          aws s3 cp "$CONFIG_PATH" "s3://$S3_BUCKET/$S3_KEY"             --content-type "text/plain; charset=utf-8"             --cache-control "no-store"
+          aws s3 cp "$CONFIG_PATH" "s3://$S3_BUCKET/$S3_KEY" \
+            --content-type "text/plain; charset=utf-8" \
+            --cache-control "no-store"
           echo "Uploaded $CONFIG_PATH to s3://$S3_BUCKET/$S3_KEY"
