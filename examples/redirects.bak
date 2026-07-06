@@ -1,0 +1,20 @@
+# Deployment-safe starter config. Replace example hosts with your real domains.
+
+<VirtualHost example.com>
+  ServerAlias www.example.com
+
+  Redirect 301 /old-page /new-page
+  RedirectMatch 301 ^/blog/(.*)$ /articles/$1
+  Redirect 302 /promo/* /campaigns/$1 [QSD]
+
+  RewriteCond %{HTTP_HOST} ^example\.com$ [NC]
+  RewriteCond %{REQUEST_URI} ^/legacy
+  RewriteRule ^/legacy/(.*)$ https://www.example.com/new/$1 [R=301,L]
+
+  RewriteCond %{QUERY_STRING} (^|&)ref=old($|&)
+  RewriteRule ^/landing$ /landing-new [R=302,L,QSA]
+</VirtualHost>
+
+<VirtualHost anotherdomain.com>
+  Redirect 302 / https://www.anotherdomain.com/home
+</VirtualHost>

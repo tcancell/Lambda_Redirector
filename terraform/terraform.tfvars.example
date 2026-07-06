@@ -1,0 +1,5 @@
+# Optional local overrides for Terraform.
+# Copy to terraform.tfvars if you want environment-specific values.
+
+redirect_cache_ttl_seconds = 600
+route53_zone_ids = {}

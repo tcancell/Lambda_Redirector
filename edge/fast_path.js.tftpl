@@ -1,0 +1,325 @@
+import cf from 'cloudfront';
+const kvsHandle = cf.kvs();
+const STATUS = {
+  301: 'Moved Permanently',
+  302: 'Found',
+  303: 'See Other',
+  307: 'Temporary Redirect',
+  308: 'Permanent Redirect'
+};
+
+async function handler(event) {
+  var request = event.request;
+  var host = header(request, 'host').toLowerCase().replace(/\.$/, '');
+  request.headers['x-redirect-host'] = { value: host };
+
+  var rules = await loadRules(host);
+  if (!rules || !rules.length) {
+    return request;
+  }
+
+  var context = buildContext(request, host);
+  for (var i = 0; i < rules.length; i++) {
+    var response = evaluateRule(rules[i], context);
+    if (response) {
+      return response;
+    }
+  }
+  return request;
+}
+
+async function loadRules(host) {
+  try {
+    return await kvsHandle.get('h:' + host, { format: 'json' });
+  } catch (err) {
+    return [];
+  }
+}
+
+function buildContext(request, host) {
+  var path = request.uri || '/';
+  var query = queryToString(request.querystring || {});
+  var scheme = header(request, 'cloudfront-forwarded-proto') || header(request, 'x-forwarded-proto') || 'https';
+  scheme = scheme.split(',')[0].trim().toLowerCase();
+  return {
+    request: request,
+    host: host,
+    path: path,
+    query: query,
+    uri: query ? path + '?' + query : path,
+    scheme: scheme,
+    method: request.method || 'GET'
+  };
+}
+
+function evaluateRule(rule, context) {
+  if (rule.t === 'redirect') {
+    return evaluateRedirect(rule, context);
+  }
+  if (rule.t === 'match') {
+    return evaluateRedirectMatch(rule, context);
+  }
+  if (rule.t === 'rewrite') {
+    return evaluateRewrite(rule, context);
+  }
+  return null;
+}
+
+function evaluateRedirect(rule, context) {
+  var target = null;
+  if (rule.src.indexOf('*') !== -1) {
+    var pattern = '^' + escapeRegex(rule.src).replace(/\\\*/g, '(.*)') + '$';
+    var match = matchRegex(pattern, context.path, rule.f);
+    if (!match) {
+      return null;
+    }
+    target = expandBackrefs(rule.dst, match, '$');
+  } else {
+    var remainder = redirectPrefixRemainder(rule.src, context.path);
+    if (remainder === null) {
+      return null;
+    }
+    target = shouldAppendRemainder(rule.dst, remainder) ? rule.dst + remainder : rule.dst;
+  }
+  return redirect(rule.s, applyQueryPolicy(target, context.query, rule.f));
+}
+
+function evaluateRedirectMatch(rule, context) {
+  var match = matchRegex(rule.p, context.path, rule.f);
+  if (!match) {
+    return null;
+  }
+  var target = expandBackrefs(rule.dst, match, '$');
+  return redirect(rule.s, applyQueryPolicy(target, context.query, rule.f));
+}
+
+function evaluateRewrite(rule, context) {
+  var conditionResult = evaluateConditions(rule.c || [], context);
+  if (!conditionResult.matched) {
+    return null;
+  }
+
+  var match = matchRegex(rule.p, context.path, rule.f);
+  if (!match && context.path.charAt(0) === '/') {
+    match = matchRegex(rule.p, context.path.substring(1), rule.f);
+  }
+  if (!match) {
+    return null;
+  }
+
+  var target = expandBackrefs(rule.dst, match, '$');
+  if (conditionResult.lastMatch) {
+    target = expandBackrefs(target, conditionResult.lastMatch, '%');
+  }
+  return redirect(rule.s, applyQueryPolicy(target, context.query, rule.f));
+}
+
+function evaluateConditions(conditions, context) {
+  if (!conditions.length) {
+    return { matched: true, lastMatch: null };
+  }
+
+  var overall = true;
+  var inOrGroup = false;
+  var groupValue = false;
+  var lastMatch = null;
+
+  for (var i = 0; i < conditions.length; i++) {
+    var result = evaluateCondition(conditions[i], context);
+    if (result.match) {
+      lastMatch = result.match;
+    }
+
+    if (flagEnabled(conditions[i].f, 'or')) {
+      groupValue = groupValue || result.matched;
+      inOrGroup = true;
+      continue;
+    }
+
+    if (inOrGroup) {
+      groupValue = groupValue || result.matched;
+      overall = overall && groupValue;
+      inOrGroup = false;
+      groupValue = false;
+    } else {
+      overall = overall && result.matched;
+    }
+
+    if (!overall) {
+      return { matched: false, lastMatch: lastMatch };
+    }
+  }
+
+  if (inOrGroup) {
+    overall = overall && groupValue;
+  }
+  return { matched: overall, lastMatch: lastMatch };
+}
+
+function evaluateCondition(condition, context) {
+  var value = expandConditionTest(condition.test, context);
+  var pattern = condition.p;
+  var negated = false;
+  var matched = false;
+  var match = null;
+
+  if (pattern.charAt(0) === '!') {
+    negated = true;
+    pattern = pattern.substring(1);
+  }
+
+  if (pattern.substring(0, 2) === '!=') {
+    matched = value !== pattern.substring(2);
+  } else if (pattern.charAt(0) === '=') {
+    matched = value === pattern.substring(1);
+  } else if (pattern === '-z') {
+    matched = value === '';
+  } else if (pattern === '-n') {
+    matched = value !== '';
+  } else {
+    match = matchRegex(pattern, value, condition.f);
+    matched = !!match;
+  }
+
+  return { matched: negated ? !matched : matched, match: match };
+}
+
+function expandConditionTest(test, context) {
+  return test.replace(/%\{([^}]+)\}/g, function(_, variable) {
+    return conditionVariable(variable, context);
+  });
+}
+
+function conditionVariable(variable, context) {
+  var name = variable.toUpperCase();
+  if (name === 'HTTP_HOST') return context.host;
+  if (name === 'REQUEST_URI') return context.uri;
+  if (name === 'REQUEST_PATH' || name === 'URI') return context.path;
+  if (name === 'QUERY_STRING') return context.query;
+  if (name === 'REQUEST_SCHEME' || name === 'SCHEME') return context.scheme;
+  if (name === 'HTTPS') return context.scheme === 'https' ? 'on' : 'off';
+  if (name === 'REQUEST_METHOD') return context.method;
+  if (name.substring(0, 5) === 'HTTP:') {
+    var headerName = name.substring(5).toLowerCase();
+    if (headerName === 'host') return context.host;
+    return header(context.request, headerName);
+  }
+  if (name.substring(0, 5) === 'HTTP_') {
+    var normalized = name.substring(5).replace(/_/g, '-').toLowerCase();
+    if (normalized === 'host') return context.host;
+    return header(context.request, normalized);
+  }
+  return '';
+}
+
+function redirect(status, location) {
+  return {
+    statusCode: status,
+    statusDescription: STATUS[status] || 'Redirect',
+    headers: {
+      location: { value: location },
+      'cache-control': { value: 'public, max-age=${redirect_cache_seconds}' }
+    }
+  };
+}
+
+function applyQueryPolicy(target, originalQuery, flags) {
+  var split = splitLocation(target);
+  var finalQuery = '';
+
+  if (flagEnabled(flags, 'qsd') || flagEnabled(flags, 'qsdiscard')) {
+    finalQuery = split.query;
+  } else if (flagEnabled(flags, 'qsa') || flagEnabled(flags, 'qsappend')) {
+    finalQuery = joinQuery(split.query, originalQuery);
+  } else if (flagEnabled(flags, 'qspreserve')) {
+    finalQuery = split.query ? joinQuery(split.query, originalQuery) : originalQuery;
+  } else if (split.query) {
+    finalQuery = split.query;
+  } else {
+    finalQuery = originalQuery;
+  }
+
+  return finalQuery ? split.base + '?' + finalQuery : split.base;
+}
+
+function splitLocation(location) {
+  var index = location.indexOf('?');
+  if (index === -1) return { base: location, query: '' };
+  return { base: location.substring(0, index), query: location.substring(index + 1) };
+}
+
+function joinQuery(first, second) {
+  if (first && second) return first + '&' + second;
+  return first || second || '';
+}
+
+function matchRegex(pattern, value, flags) {
+  try {
+    return value.match(new RegExp(pattern, flagEnabled(flags, 'nc') ? 'i' : ''));
+  } catch (err) {
+    return null;
+  }
+}
+
+function expandBackrefs(target, match, prefix) {
+  var escaped = prefix === '$' ? '\\$' : '%';
+  var regex = new RegExp(escaped + '(\\d+)', 'g');
+  return target.replace(regex, function(_, indexText) {
+    var index = parseInt(indexText, 10);
+    return match[index] || '';
+  });
+}
+
+function redirectPrefixRemainder(source, path) {
+  if (source === '/') {
+    return path.charAt(0) === '/' ? path.substring(1) : path;
+  }
+  if (path === source) {
+    return '';
+  }
+  var prefix = source.replace(/\/$/, '') + '/';
+  if (path.indexOf(prefix) === 0) {
+    return path.substring(source.length);
+  }
+  return null;
+}
+
+function shouldAppendRemainder(target, remainder) {
+  return !!remainder && target.indexOf('$1') === -1 && target.indexOf('$${') === -1;
+}
+
+function flagEnabled(flags, name) {
+  return !!(flags && flags[name] === true);
+}
+
+function header(request, name) {
+  var item = request.headers[name.toLowerCase()];
+  return item && item.value ? item.value : '';
+}
+
+function queryToString(querystring) {
+  var parts = [];
+  for (var name in querystring) {
+    if (!Object.prototype.hasOwnProperty.call(querystring, name)) continue;
+    var item = querystring[name];
+    if (item.multiValue) {
+      for (var i = 0; i < item.multiValue.length; i++) {
+        parts.push(queryPart(name, item.multiValue[i].value));
+      }
+    } else {
+      parts.push(queryPart(name, item.value));
+    }
+  }
+  return parts.join('&');
+}
+
+function queryPart(name, value) {
+  if (value === undefined || value === null || value === '') {
+    return name;
+  }
+  return name + '=' + value;
+}
+
+function escapeRegex(value) {
+  return value.replace(/[|\\{}()[\]^$+?.*]/g, '\\$&');
+}
