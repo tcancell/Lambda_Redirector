@@ -308,6 +308,71 @@ aws iam create-service-linked-role --aws-service-name logger.cloudfront.amazonaw
 
 If either command says the role already exists, that part is already fine.
 
+## GitHub Actions Config Deployment
+
+The repository includes a workflow at `.github/workflows/deploy-redirect-config.yml` that validates and uploads the redirect config when config-related changes are pushed to `main`. It also supports manual runs from the GitHub Actions tab.
+
+The workflow performs these steps:
+
+- Checks out the repository.
+- Runs `python tools/validate_redirect_config.py examples/redirects.conf --github-annotations --summary-json`.
+- Fails the run if the Apache-style config has syntax errors.
+- Emits warnings for rules that are valid but remain on Lambda@Edge fallback instead of CloudFront Function fast path.
+- Uses GitHub OIDC to assume an AWS role.
+- Uploads the validated config to S3.
+
+Configure these GitHub repository settings:
+
+- Repository variable `REDIRECT_CONFIG_BUCKET`: S3 bucket name from `terraform output config_bucket_name`.
+- Repository variable `REDIRECT_CONFIG_KEY`: optional, defaults to `redirects.conf`.
+- Repository variable `REDIRECT_CONFIG_PATH`: optional, defaults to `examples/redirects.conf`.
+- Repository variable `AWS_REGION`: optional, defaults to `us-east-1`.
+- Repository secret `AWS_ROLE_TO_ASSUME`: IAM role ARN that GitHub Actions can assume.
+
+The AWS role should trust GitHub OIDC for this repository and allow upload to the config object. Example permissions policy, replacing the bucket and key:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject"
+      ],
+      "Resource": "arn:aws:s3:::redirect-dev-953389970010-us-east-1-config/redirects.conf"
+    }
+  ]
+}
+```
+
+Example trust policy, replacing account, owner, and repo as needed:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+        },
+        "StringLike": {
+          "token.actions.githubusercontent.com:sub": "repo:tcancell/Lambda_Redirector:ref:refs/heads/main"
+        }
+      }
+    }
+  ]
+}
+```
+
+The S3 upload triggers the config compiler Lambda, so fast-path-compatible rules are synced into CloudFront KeyValueStore automatically.
+
 ## Updating Redirects
 
 Validate and inspect the fast/fallback split locally:
