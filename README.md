@@ -37,7 +37,7 @@ examples/
 
 ## Rule Configuration
 
-The redirect file is stored in S3, versioned, and remains the source of truth. A compiler Lambda runs when the config object is uploaded and syncs fast-path-safe rules into CloudFront KeyValueStore. Lambda@Edge still loads the full S3 config as the fallback engine, so unsupported rules continue to work.
+The redirect file is stored in S3, versioned, and remains the source of truth. A compiler Lambda runs when the config object is created or updated and syncs fast-path-safe rules into CloudFront KeyValueStore. Lambda@Edge still loads the full S3 config as the fallback engine, so unsupported rules continue to work.
 
 Example:
 
@@ -209,13 +209,9 @@ You should see the configured redirect status and a `Location` header.
 
 ### 8. Update Redirect Rules
 
-Terraform uploads `examples/redirects.conf` by default. To update rules without redeploying the infrastructure:
+Terraform uploads `examples/redirects.conf` by default. For Terraform Cloud, update redirects through the `redirect-config` branch and merge to `main` only after the GitHub validation workflow passes. Terraform Cloud can then run from `main` and update the S3 object through the `aws_s3_object.sample_config` resource.
 
-```bash
-aws s3 cp ../examples/redirects.conf "s3://$(terraform output -raw config_bucket_name)/$(terraform output -raw config_object_key)"
-```
-
-That S3 upload invokes the config compiler Lambda. Compatible rules are synced into CloudFront KeyValueStore for the fast path, while the full config remains available to Lambda@Edge fallback. If the config object already existed before this redesign was applied, upload it once after `terraform apply` to seed the KeyValueStore.
+When Terraform writes the config object to S3, the bucket notification invokes the config compiler Lambda. Compatible rules are synced into CloudFront KeyValueStore for the fast path, while the full config remains available to Lambda@Edge fallback. If the config object already existed before this redesign was applied, run one Terraform apply after the S3 notification is in place to seed the KeyValueStore.
 
 ### 9. Destroy When Needed
 
@@ -232,7 +228,7 @@ By default, `force_destroy_buckets` is `false`, so Terraform will not delete non
 The platform uses a hybrid fast path plus fallback design:
 
 - S3 Apache-style config remains the source of truth.
-- A compiler Lambda parses the config on S3 upload.
+- A compiler Lambda parses the config on S3 object create/update events.
 - Fast-path-safe rules are written to CloudFront KeyValueStore.
 - A CloudFront Function runs on `viewer-request` and evaluates the fast-path rules directly at the edge.
 - Lambda@Edge runs on `origin-request` as the full Apache-style fallback engine for anything the compiler skips.
@@ -308,86 +304,46 @@ aws iam create-service-linked-role --aws-service-name logger.cloudfront.amazonaw
 
 If either command says the role already exists, that part is already fine.
 
-## GitHub Actions Config Deployment
+## GitHub Actions Config Validation
 
-The repository includes a workflow at `.github/workflows/deploy-redirect-config.yml` that validates and uploads the redirect config when config-related changes are pushed to `main`. It also supports manual runs from the GitHub Actions tab.
+The repository includes a workflow at `.github/workflows/validate-redirect-config.yml` that validates the Apache-style redirect config without uploading anything to AWS. Terraform Cloud remains responsible for applying the S3 object from `main`.
 
-The workflow performs these steps:
+Recommended branch flow:
+
+1. Make redirect config edits on the `redirect-config` branch.
+2. Push the branch. The validation workflow runs on push.
+3. Open a pull request into `main`. The same validation workflow runs on the pull request.
+4. Merge only after `Validate Apache redirect config` passes.
+5. Let Terraform Cloud apply from `main`; Terraform updates S3, and the S3 event invokes the compiler Lambda.
+
+The workflow performs these checks:
 
 - Checks out the repository.
 - Runs `python tools/validate_redirect_config.py examples/redirects.conf --github-annotations --summary-json`.
 - Fails the run if the Apache-style config has syntax errors.
 - Emits warnings for rules that are valid but remain on Lambda@Edge fallback instead of CloudFront Function fast path.
-- Uses GitHub OIDC to assume an AWS role.
-- Uploads the validated config to S3.
+- Runs the parser, compiler, and rewrite-condition unit tests.
 
-Configure these GitHub repository settings:
+Optional GitHub repository variable:
 
-- Repository variable `REDIRECT_CONFIG_BUCKET`: S3 bucket name from `terraform output config_bucket_name`.
-- Repository variable `REDIRECT_CONFIG_KEY`: optional, defaults to `redirects.conf`.
-- Repository variable `REDIRECT_CONFIG_PATH`: optional, defaults to `examples/redirects.conf`.
-- Repository variable `AWS_REGION`: optional, defaults to `us-east-1`.
-- Repository secret `AWS_ROLE_TO_ASSUME`: IAM role ARN that GitHub Actions can assume.
+- `REDIRECT_CONFIG_PATH`: override the config path if you move it from `examples/redirects.conf`.
 
-The AWS role should trust GitHub OIDC for this repository and allow upload to the config object. Example permissions policy, replacing the bucket and key:
+To make GitHub enforce this before merges to `main`, open the repository settings in GitHub and add a branch protection or ruleset for `main` that requires pull requests and requires the `Validate Apache redirect config` status check to pass.
 
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "s3:PutObject"
-      ],
-      "Resource": "arn:aws:s3:::redirect-dev-953389970010-us-east-1-config/redirects.conf"
-    }
-  ]
-}
-```
-
-Example trust policy, replacing account, owner, and repo as needed:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": {
-        "Federated": "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
-      },
-      "Action": "sts:AssumeRoleWithWebIdentity",
-      "Condition": {
-        "StringEquals": {
-          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
-        },
-        "StringLike": {
-          "token.actions.githubusercontent.com:sub": "repo:tcancell/Lambda_Redirector:ref:refs/heads/main"
-        }
-      }
-    }
-  ]
-}
-```
-
-The S3 upload triggers the config compiler Lambda, so fast-path-compatible rules are synced into CloudFront KeyValueStore automatically.
+No GitHub Actions AWS role, OIDC trust, or S3 upload permission is required for this workflow.
 
 ## Updating Redirects
 
-Validate and inspect the fast/fallback split locally:
+Validate and inspect the fast/fallback split locally before opening a pull request:
 
 ```bash
+python3 tools/validate_redirect_config.py examples/redirects.conf --summary-json
 python3 tools/compile_fastpath.py examples/redirects.conf
 ```
 
-Upload the config to S3. No CloudFront redeploy is needed:
+Commit redirect changes to the `redirect-config` branch and open a pull request to `main`. GitHub Actions validates the config on both push and pull request. After the pull request merges, Terraform Cloud should apply from `main` and write `examples/redirects.conf` to S3.
 
-```bash
-aws s3 cp examples/redirects.conf s3://$(terraform -chdir=terraform output -raw config_bucket_name)/$(terraform -chdir=terraform output -raw config_object_key)
-```
-
-The upload triggers the compiler Lambda, which updates CloudFront KeyValueStore for fast-path-compatible rules. Lambda@Edge fallback also reads the same S3 config and refreshes warm runtimes based on `config_check_interval_seconds`.
+The S3 object change triggers the compiler Lambda, which updates CloudFront KeyValueStore for fast-path-compatible rules. Lambda@Edge fallback also reads the same S3 config and refreshes warm runtimes based on `config_check_interval_seconds`.
 
 ## Adding a Domain
 
@@ -396,7 +352,7 @@ The upload triggers the compiler Lambda, which updates CloudFront KeyValueStore 
 3. Create or update DNS to point the domain at the CloudFront distribution domain.
 4. Add a matching `<VirtualHost domain.com>` block to the S3 redirect config.
 5. Run `python3 tools/compile_fastpath.py examples/redirects.conf` to confirm the fast/fallback split.
-6. Upload the updated redirect config to S3. No Terraform apply is required unless you want Terraform to create Route 53 DNS records.
+6. Commit the updated redirect config to the `redirect-config` branch, open a pull request to `main`, and let Terraform Cloud apply after the validation workflow passes and the pull request is merged.
 
 ## Lambda@Edge Notes
 

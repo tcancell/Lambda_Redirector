@@ -1,0 +1,59 @@
+name: Validate redirect config
+
+on:
+  push:
+    branches:
+      - main
+      - redirect-config
+    paths:
+      - "examples/redirects.conf"
+      - "src/parser.py"
+      - "src/compiler.py"
+      - "tools/validate_redirect_config.py"
+      - ".github/workflows/validate-redirect-config.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "examples/redirects.conf"
+      - "src/parser.py"
+      - "src/compiler.py"
+      - "tools/validate_redirect_config.py"
+      - ".github/workflows/validate-redirect-config.yml"
+  workflow_dispatch:
+    inputs:
+      config_path:
+        description: "Redirect config path to validate"
+        required: false
+        default: "examples/redirects.conf"
+
+permissions:
+  contents: read
+
+env:
+  CONFIG_PATH: ${{ github.event.inputs.config_path || vars.REDIRECT_CONFIG_PATH || 'examples/redirects.conf' }}
+
+jobs:
+  validate:
+    name: Validate Apache redirect config
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate Apache redirect config syntax
+        run: |
+          python tools/validate_redirect_config.py "$CONFIG_PATH" --github-annotations --summary-json
+
+      - name: Run redirect parser and compiler tests
+        run: |
+          python -m unittest \
+            tests.test_parser \
+            tests.test_compiler \
+            tests.test_rewrite_conditions
