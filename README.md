@@ -211,7 +211,7 @@ You should see the configured redirect status and a `Location` header.
 
 Terraform uploads `examples/redirects.conf` by default. For Terraform Cloud, update redirects through the `redirect-config` branch and merge to `main` only after the GitHub validation workflow passes. Terraform Cloud can then run from `main` and update the S3 object through the `aws_s3_object.sample_config` resource.
 
-When Terraform writes the config object to S3, the bucket notification invokes the config compiler Lambda. Compatible rules are synced into CloudFront KeyValueStore for the fast path, while the full config remains available to Lambda@Edge fallback. If the config object already existed before this redesign was applied, run one Terraform apply after the S3 notification is in place to seed the KeyValueStore.
+When Terraform writes the config object to S3, the bucket notification invokes the config compiler Lambda. By default, Terraform also invokes the compiler synchronously after it writes `examples/redirects.conf`, which lets Terraform Cloud finish only after the fast-path KeyValueStore update has been attempted. Compatible rules are synced into CloudFront KeyValueStore for the fast path, while the full config remains available to Lambda@Edge fallback. If the config object already existed before this redesign was applied, run one Terraform apply after the S3 notification is in place to seed the KeyValueStore.
 
 ### 9. Destroy When Needed
 
@@ -271,6 +271,14 @@ redirect_cache_ttl_seconds = 600
 ```
 
 Set it to `0` to disable fallback redirect response caching. When caching is enabled, S3 config updates still update the fast path through KeyValueStore, but already-cached Lambda fallback redirects remain in CloudFront until their TTL expires or you invalidate the affected paths.
+
+To make Terraform Cloud wait for the fast-path compiler after it writes the config object, leave this enabled:
+
+```hcl
+invoke_compiler_after_config_apply = true
+```
+
+This does not replace the S3 event trigger. It makes Terraform Cloud perform a deterministic compiler invocation as part of the apply, which reduces the short window where a first request can miss CloudFront KeyValueStore and fall through to Lambda@Edge.
 
 ## Troubleshooting CloudFront 503 Lambda@Edge Errors
 
@@ -343,7 +351,15 @@ python3 tools/compile_fastpath.py examples/redirects.conf
 
 Commit redirect changes to the `redirect-config` branch and open a pull request to `main`. GitHub Actions validates the config on both push and pull request. After the pull request merges, Terraform Cloud should apply from `main` and write `examples/redirects.conf` to S3.
 
-The S3 object change triggers the compiler Lambda, which updates CloudFront KeyValueStore for fast-path-compatible rules. Lambda@Edge fallback also reads the same S3 config and refreshes warm runtimes based on `config_check_interval_seconds`.
+The S3 object change triggers the compiler Lambda, and Terraform Cloud also invokes the compiler during apply when `invoke_compiler_after_config_apply` is enabled. The compiler updates CloudFront KeyValueStore for fast-path-compatible rules. Lambda@Edge fallback also reads the same S3 config and refreshes warm runtimes based on `config_check_interval_seconds`.
+
+Check which engine handled a redirect with:
+
+```bash
+curl -I https://example.com/old-page
+```
+
+A fast redirect includes `x-redirect-engine: cloudfront-function`. A slower fallback redirect includes `x-redirect-engine: lambda-edge`.
 
 ## Adding a Domain
 

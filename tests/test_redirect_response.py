@@ -16,6 +16,7 @@ class RedirectResponseTests(unittest.TestCase):
         self.assertEqual(response["statusDescription"], "Permanent Redirect")
         self.assertEqual(response["headers"]["location"][0]["value"], "https://example.com/new")
         self.assertEqual(response["headers"]["cache-control"][0]["value"], "public, max-age=300")
+        self.assertEqual(response["headers"]["x-redirect-engine"][0]["value"], "lambda-edge")
 
     def test_redirect_response_can_disable_caching(self):
         response = redirect_response(302, "https://example.com/new", cache_seconds=0)
@@ -27,6 +28,7 @@ class RedirectResponseTests(unittest.TestCase):
 
         self.assertEqual(response["status"], "404")
         self.assertEqual(response["headers"]["content-type"][0]["value"], "text/plain; charset=utf-8")
+        self.assertEqual(response["headers"]["x-redirect-engine"][0]["value"], "lambda-edge")
         self.assertIn("No redirect", response["body"])
 
     def test_cloudfront_origin_request_context_prefers_redirect_host_header(self):

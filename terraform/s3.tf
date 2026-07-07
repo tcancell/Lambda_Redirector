@@ -66,6 +66,40 @@ resource "aws_s3_object" "sample_config" {
   ]
 }
 
+resource "aws_lambda_invocation" "compile_sample_config" {
+  count = var.manage_sample_config_object && var.invoke_compiler_after_config_apply ? 1 : 0
+
+  function_name = aws_lambda_function.config_compiler.function_name
+
+  input = jsonencode({
+    Records = [
+      {
+        eventSource = "aws:s3"
+        eventName   = "ObjectCreated:Put"
+        s3 = {
+          bucket = {
+            name = aws_s3_bucket.config.bucket
+          }
+          object = {
+            key = var.config_key
+          }
+        }
+      }
+    ]
+  })
+
+  triggers = {
+    config_etag      = filemd5("${path.module}/../examples/redirects.conf")
+    config_key       = var.config_key
+    compiler_package = data.archive_file.config_compiler.output_base64sha256
+  }
+
+  depends_on = [
+    aws_s3_object.sample_config,
+    aws_iam_role_policy.config_compiler,
+  ]
+}
+
 resource "aws_s3_bucket" "fallback" {
   bucket        = local.fallback_bucket_name
   force_destroy = var.force_destroy_buckets

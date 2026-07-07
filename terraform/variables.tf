@@ -51,6 +51,12 @@ variable "manage_sample_config_object" {
   default     = true
 }
 
+variable "invoke_compiler_after_config_apply" {
+  description = "Synchronously invoke the config compiler after Terraform writes examples/redirects.conf to S3. This reduces the window where first requests can fall back to Lambda@Edge before CloudFront KeyValueStore is updated."
+  type        = bool
+  default     = true
+}
+
 variable "force_destroy_buckets" {
   description = "Allow Terraform to delete non-empty buckets. Keep false for production unless you know you want cleanup behavior."
   type        = bool

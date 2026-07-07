@@ -218,7 +218,8 @@ function redirect(status, location) {
     statusDescription: STATUS[status] || 'Redirect',
     headers: {
       location: { value: location },
-      'cache-control': { value: 'public, max-age=${redirect_cache_seconds}' }
+      'cache-control': { value: 'public, max-age=${redirect_cache_seconds}' },
+      'x-redirect-engine': { value: 'cloudfront-function' }
     }
   };
 }

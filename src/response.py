@@ -14,7 +14,7 @@ REDIRECT_REASONS = {
 }
 
 
-def redirect_response(status: int, location: str, cache_seconds: int = 300) -> dict:
+def redirect_response(status: int, location: str, cache_seconds: int = 300, engine: str = "lambda-edge") -> dict:
     reason = REDIRECT_REASONS.get(status, HTTPStatus(status).phrase)
     cache_control = "no-store" if cache_seconds <= 0 else f"public, max-age={cache_seconds}"
     return {
@@ -23,6 +23,7 @@ def redirect_response(status: int, location: str, cache_seconds: int = 300) -> d
         "headers": {
             "location": [{"key": "Location", "value": location}],
             "cache-control": [{"key": "Cache-Control", "value": cache_control}],
+            "x-redirect-engine": [{"key": "X-Redirect-Engine", "value": engine}],
         },
     }
 
@@ -36,6 +37,7 @@ def fallback_response(status: int = 404, body: str | None = None) -> dict:
         "headers": {
             "content-type": [{"key": "Content-Type", "value": "text/plain; charset=utf-8"}],
             "cache-control": [{"key": "Cache-Control", "value": "no-store"}],
+            "x-redirect-engine": [{"key": "X-Redirect-Engine", "value": "lambda-edge"}],
         },
         "body": response_body,
     }
