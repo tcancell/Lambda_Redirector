@@ -55,9 +55,17 @@ class _ConditionEvaluation:
     last_match: re.Match[str] | None = None
 
 
-def context_from_cloudfront_request(request: dict) -> RequestContext:
+def context_from_cloudfront_request(
+    request: dict,
+    trusted_edge_header_name: str = "",
+    trusted_edge_header_value: str = "",
+) -> RequestContext:
     headers = _normalize_headers(request.get("headers", {}))
-    host = _strip_host_port(_first_header(headers, "x-redirect-host") or _first_header(headers, "host"))
+    host_header = _first_header(headers, "host")
+    redirect_host = _first_header(headers, "x-redirect-host")
+    if _trusted_edge_headers(headers, trusted_edge_header_name, trusted_edge_header_value) and redirect_host:
+        host_header = redirect_host
+    host = _strip_host_port(host_header)
     scheme = _detect_scheme(headers)
     path = request.get("uri") or "/"
     query = request.get("querystring") or ""
@@ -418,3 +426,9 @@ def _strip_host_port(host: str) -> str:
     if ":" in host:
         return host.rsplit(":", 1)[0]
     return host
+
+
+def _trusted_edge_headers(headers: dict[str, list[str]], name: str, expected_value: str) -> bool:
+    if not name or not expected_value:
+        return False
+    return _first_header(headers, name) == expected_value

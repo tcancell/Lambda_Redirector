@@ -90,7 +90,7 @@ Terraform does not manage CloudFront alternate domain names or viewer certificat
 ### Prerequisites
 
 - Terraform `1.5.0` or newer.
-- AWS CLI credentials with permission to manage S3, IAM, Lambda, CloudFront, CloudWatch Logs, and optionally Route 53.
+- AWS CLI credentials with permission to manage S3, IAM, Lambda, CloudFront, CloudWatch Logs, KMS, SQS, CloudWatch alarms, and optionally Route 53.
 - An ACM certificate in `us-east-1` if you plan to add custom domains to CloudFront in the AWS Console.
 - Route 53 hosted zone IDs if you want Terraform to create DNS records. Leave them out if you want to manage DNS manually.
 
@@ -120,6 +120,16 @@ Create `terraform/terraform.tfvars`:
 aws_region       = "us-east-1"
 environment_name = "prod"
 config_key       = "redirects.conf"
+
+# Production hardening: allow absolute redirects only to these hosts.
+allowed_redirect_hosts = [
+  "www.example.com",
+  "example.com",
+]
+
+# Fallback redirects stay uncached unless every fallback rule depends only on path, query, and host.
+redirect_cache_ttl_seconds = 0
+fastpath_redirect_cache_ttl_seconds = 600
 
 # Leave empty when DNS is managed manually in the AWS Console.
 route53_zone_ids = {}
@@ -157,13 +167,15 @@ terraform plan
 
 Confirm that the plan includes:
 
-- One versioned S3 bucket for redirect configuration.
-- One private S3 bucket for CloudFront fallback origin content.
+- One versioned S3 bucket for redirect configuration, encrypted with a customer-managed KMS key.
+- One private S3 bucket for CloudFront fallback origin content, encrypted with a customer-managed KMS key.
+- One S3 access log bucket for S3 and CloudFront logs.
 - An IAM role trusted by `lambda.amazonaws.com` and `edgelambda.amazonaws.com`.
 - A published Lambda version for Lambda@Edge.
-- A CloudFront distribution with a viewer-request CloudFront Function fast path and an origin-request Lambda@Edge fallback association.
+- A CloudFront distribution with access logging, security response headers, a viewer-request CloudFront Function fast path, and an origin-request Lambda@Edge fallback association.
 - A CloudFront KeyValueStore populated by the S3-triggered config compiler Lambda.
 - A default CloudFront viewer certificate. Custom aliases and certificates are intentionally left for AWS Console management.
+- KMS keys, CloudWatch alarms, and a dead-letter queue for the config compiler Lambda.
 - Route 53 records only for names included in `route53_zone_ids`.
 
 ### 5. Apply
@@ -262,15 +274,19 @@ The fallback cache key includes:
 
 - Request path
 - Query string
-- `x-redirect-host`, which preserves multi-domain correctness
+- A trusted internal `x-redirect-host` value stamped by the CloudFront Function
 
-Set the fallback redirect response cache TTL with Terraform:
+Fallback redirect response caching defaults to disabled:
 
 ```hcl
-redirect_cache_ttl_seconds = 600
+redirect_cache_ttl_seconds = 0
 ```
 
-Set it to `0` to disable fallback redirect response caching. When caching is enabled, S3 config updates still update the fast path through KeyValueStore, but already-cached Lambda fallback redirects remain in CloudFront until their TTL expires or you invalidate the affected paths.
+Keep it at `0` unless every fallback rule depends only on path, query string, and host. Fast-path redirects avoid Lambda@Edge and can advertise client/proxy caching separately:
+
+```hcl
+fastpath_redirect_cache_ttl_seconds = 600
+```
 
 To make Terraform Cloud wait for the fast-path compiler after it writes the config object, leave this enabled:
 
@@ -328,17 +344,34 @@ The workflow performs these checks:
 
 - Checks out the repository.
 - Runs `python tools/validate_redirect_config.py examples/redirects.conf --github-annotations --summary-json`.
-- Fails the run if the Apache-style config has syntax errors.
+- Fails the run if the Apache-style config has syntax or security-policy errors.
 - Emits warnings for rules that are valid but remain on Lambda@Edge fallback instead of CloudFront Function fast path.
-- Runs the parser, compiler, and rewrite-condition unit tests.
+- Runs the full unit test suite and Python compile checks.
+- Runs `terraform fmt`, `terraform validate`, Checkov, and Trivy config scanning.
 
-Optional GitHub repository variable:
+Optional GitHub repository variables:
 
 - `REDIRECT_CONFIG_PATH`: override the config path if you move it from `examples/redirects.conf`.
+- `ALLOWED_REDIRECT_HOSTS`: comma-separated absolute redirect destination hosts to enforce in CI.
 
 To make GitHub enforce this before merges to `main`, open the repository settings in GitHub and add a branch protection or ruleset for `main` that requires pull requests and requires the `Validate Apache redirect config` status check to pass.
 
 No GitHub Actions AWS role, OIDC trust, or S3 upload permission is required for this workflow.
+
+## Production Security Notes
+
+The production defaults intentionally prefer safety over convenience:
+
+- Lambda@Edge fallback redirect caching defaults to `0` because fallback rules can depend on headers, scheme, or method.
+- Absolute redirect targets must use HTTPS.
+- Protocol-relative targets, control characters, dynamic redirect hostnames, oversized configs, invalid regexes, and risky nested regex repetition are rejected.
+- `allowed_redirect_hosts` should be populated for production so config authors cannot introduce arbitrary external redirect destinations.
+- CloudFront uses a generated internal token header so Lambda@Edge only trusts `x-redirect-host` when it was stamped by the CloudFront Function.
+- S3 buckets use public-access blocks, versioning, lifecycle rules, access logging, KMS encryption for application buckets, and explicit denies for insecure transport.
+- Lambda and compiler logs use KMS-encrypted CloudWatch log groups with 365-day retention by default.
+- The config compiler has reserved concurrency, X-Ray tracing, and an encrypted dead-letter queue.
+
+Checkov and Trivy are part of the CI gate. The documented scan exceptions cover items that are intentionally out of scope or incompatible with the service shape: WAF is excluded by request, Lambda@Edge does not support several Lambda controls, CloudFront custom certificates are console-managed, the log delivery bucket requires ACL/SSE-S3 behavior, and cross-region S3 replication/geographic restrictions are business-continuity choices rather than redirect-engine requirements.
 
 ## Updating Redirects
 
@@ -359,7 +392,13 @@ Check which engine handled a redirect with:
 curl -I https://example.com/old-page
 ```
 
-A fast redirect includes `x-redirect-engine: cloudfront-function`. A slower fallback redirect includes `x-redirect-engine: lambda-edge`.
+Diagnostic response headers are disabled by default. To temporarily expose which engine handled a redirect, set:
+
+```hcl
+enable_diagnostic_headers = true
+```
+
+A fast redirect then includes `x-redirect-engine: cloudfront-function`. A slower fallback redirect includes `x-redirect-engine: lambda-edge`.
 
 ## Adding a Domain
 

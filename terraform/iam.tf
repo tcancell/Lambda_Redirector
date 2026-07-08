@@ -60,6 +60,17 @@ data "aws_iam_policy_document" "lambda_edge" {
       values   = [var.config_key]
     }
   }
+
+  statement {
+    sid = "DecryptRedirectConfigObject"
+    actions = [
+      "kms:Decrypt",
+      "kms:DescribeKey",
+    ]
+    resources = [
+      aws_kms_key.regional.arn,
+    ]
+  }
 }
 
 resource "aws_iam_role_policy" "lambda_edge" {
@@ -123,6 +134,38 @@ data "aws_iam_policy_document" "config_compiler" {
     resources = [
       aws_cloudfront_key_value_store.redirect_fastpath.arn,
     ]
+  }
+
+  statement {
+    sid = "UseRegionalKmsKey"
+    actions = [
+      "kms:Decrypt",
+      "kms:DescribeKey",
+      "kms:Encrypt",
+      "kms:GenerateDataKey*",
+    ]
+    resources = [
+      aws_kms_key.regional.arn,
+    ]
+  }
+
+  statement {
+    sid = "WriteCompilerDeadLetterQueue"
+    actions = [
+      "sqs:SendMessage",
+    ]
+    resources = [
+      aws_sqs_queue.config_compiler_dlq.arn,
+    ]
+  }
+
+  statement {
+    sid = "WriteXRayTraces"
+    actions = [
+      "xray:PutTelemetryRecords",
+      "xray:PutTraceSegments",
+    ]
+    resources = ["*"]
   }
 }
 

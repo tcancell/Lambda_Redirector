@@ -16,6 +16,11 @@ class RedirectResponseTests(unittest.TestCase):
         self.assertEqual(response["statusDescription"], "Permanent Redirect")
         self.assertEqual(response["headers"]["location"][0]["value"], "https://example.com/new")
         self.assertEqual(response["headers"]["cache-control"][0]["value"], "public, max-age=300")
+        self.assertNotIn("x-redirect-engine", response["headers"])
+
+    def test_redirect_response_can_include_diagnostic_header(self):
+        response = redirect_response(301, "https://example.com/new", include_diagnostic_header=True)
+
         self.assertEqual(response["headers"]["x-redirect-engine"][0]["value"], "lambda-edge")
 
     def test_redirect_response_can_disable_caching(self):
@@ -28,8 +33,13 @@ class RedirectResponseTests(unittest.TestCase):
 
         self.assertEqual(response["status"], "404")
         self.assertEqual(response["headers"]["content-type"][0]["value"], "text/plain; charset=utf-8")
-        self.assertEqual(response["headers"]["x-redirect-engine"][0]["value"], "lambda-edge")
+        self.assertNotIn("x-redirect-engine", response["headers"])
         self.assertIn("No redirect", response["body"])
+
+    def test_fallback_response_can_include_diagnostic_header(self):
+        response = fallback_response(404, "No redirect rule matched this request.", include_diagnostic_header=True)
+
+        self.assertEqual(response["headers"]["x-redirect-engine"][0]["value"], "lambda-edge")
 
     def test_cloudfront_origin_request_context_prefers_redirect_host_header(self):
         request = {
@@ -42,9 +52,22 @@ class RedirectResponseTests(unittest.TestCase):
             },
         }
 
-        context = context_from_cloudfront_request(request)
+        context = context_from_cloudfront_request(
+            request,
+            trusted_edge_header_name="x-redirect-edge-token",
+            trusted_edge_header_value="secret",
+        )
 
-        self.assertEqual(context.host, "example.com")
+        self.assertEqual(context.host, "fallback-bucket.s3.amazonaws.com")
+
+        request["headers"]["x-redirect-edge-token"] = [{"key": "X-Redirect-Edge-Token", "value": "secret"}]
+        trusted_context = context_from_cloudfront_request(
+            request,
+            trusted_edge_header_name="x-redirect-edge-token",
+            trusted_edge_header_value="secret",
+        )
+
+        self.assertEqual(trusted_context.host, "example.com")
 
     def test_cloudfront_request_context_parses_host_path_query_and_headers(self):
         request = {

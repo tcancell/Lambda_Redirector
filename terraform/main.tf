@@ -10,6 +10,10 @@ terraform {
       source  = "hashicorp/aws"
       version = ">= 5.0"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = ">= 3.5.0"
+    }
   }
 }
 
@@ -45,6 +49,8 @@ locals {
 
   lambda_function_name = substr("${local.resource_prefix}-redirect-edge", 0, 64)
   fallback_origin_id   = "${local.resource_prefix}-fallback-s3"
+
+  allowed_redirect_hosts_csv = join(",", var.allowed_redirect_hosts)
 
   common_tags = merge(
     var.tags,

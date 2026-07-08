@@ -70,14 +70,49 @@ variable "config_check_interval_seconds" {
 }
 
 variable "redirect_cache_ttl_seconds" {
-  description = "CloudFront cache TTL, in seconds, for Lambda-generated redirect responses. Set to 0 to disable redirect response caching."
+  description = "CloudFront cache TTL, in seconds, for Lambda@Edge fallback redirect responses. Keep 0 unless every fallback rule only depends on cache-key fields."
   type        = number
-  default     = 600
+  default     = 0
 
   validation {
     condition     = var.redirect_cache_ttl_seconds >= 0
     error_message = "redirect_cache_ttl_seconds must be 0 or greater."
   }
+}
+
+variable "fastpath_redirect_cache_ttl_seconds" {
+  description = "Cache-Control max-age, in seconds, returned by CloudFront Function fast-path redirects. This is a client/proxy hint; CloudFront Function still evaluates every viewer request."
+  type        = number
+  default     = 600
+
+  validation {
+    condition     = var.fastpath_redirect_cache_ttl_seconds >= 0
+    error_message = "fastpath_redirect_cache_ttl_seconds must be 0 or greater."
+  }
+}
+
+variable "allowed_redirect_hosts" {
+  description = "Optional allowlist of absolute redirect destination hosts. Leave empty only for non-production or fully trusted redirect configs. Wildcards such as *.example.com are supported."
+  type        = list(string)
+  default     = []
+}
+
+variable "require_https_redirect_targets" {
+  description = "Require absolute redirect targets to use HTTPS. Relative targets are still allowed."
+  type        = bool
+  default     = true
+}
+
+variable "max_redirect_config_bytes" {
+  description = "Maximum size, in bytes, for the Apache-style redirect config object."
+  type        = number
+  default     = 262144
+}
+
+variable "enable_diagnostic_headers" {
+  description = "Return x-redirect-engine response headers for troubleshooting. Keep false in production unless actively debugging."
+  type        = bool
+  default     = false
 }
 
 variable "fallback_behavior" {
@@ -138,10 +173,46 @@ variable "compiler_lambda_timeout_seconds" {
   default     = 30
 }
 
-variable "log_retention_days" {
-  description = "Retention for the primary Lambda log group in us-east-1."
+variable "compiler_reserved_concurrent_executions" {
+  description = "Reserved concurrency for the config compiler Lambda."
   type        = number
-  default     = 30
+  default     = 5
+}
+
+variable "lambda_code_signing_config_arn" {
+  description = "Optional Lambda code signing config ARN. Lambda@Edge and compiler functions use it when provided."
+  type        = string
+  default     = ""
+}
+
+variable "log_retention_days" {
+  description = "Retention for Lambda log groups. Keep at least 365 days for audit-ready production deployments."
+  type        = number
+  default     = 365
+}
+
+variable "access_log_retention_days" {
+  description = "Retention period for S3 and CloudFront access logs."
+  type        = number
+  default     = 365
+}
+
+variable "config_noncurrent_version_retention_days" {
+  description = "Retention period for noncurrent redirect config object versions."
+  type        = number
+  default     = 365
+}
+
+variable "alarm_actions" {
+  description = "SNS topic ARNs or other CloudWatch alarm actions for production alerts."
+  type        = list(string)
+  default     = []
+}
+
+variable "ok_actions" {
+  description = "SNS topic ARNs or other CloudWatch OK actions for production alerts."
+  type        = list(string)
+  default     = []
 }
 
 variable "viewer_protocol_policy" {

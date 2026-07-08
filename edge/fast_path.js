@@ -1,5 +1,6 @@
 import cf from 'cloudfront';
 const kvsHandle = cf.kvs();
+const DIAGNOSTIC_HEADERS_ENABLED = false;
 const STATUS = {
   301: 'Moved Permanently',
   302: 'Found',
@@ -12,6 +13,7 @@ async function handler(event) {
   var request = event.request;
   var host = header(request, 'host').toLowerCase().replace(/\.$/, '');
   request.headers['x-redirect-host'] = { value: host };
+  request.headers['x-redirect-edge-token'] = { value: 'local-dev-token' };
 
   var rules = await loadRules(host);
   if (!rules || !rules.length) {
@@ -213,14 +215,17 @@ function conditionVariable(variable, context) {
 }
 
 function redirect(status, location) {
+  var headers = {
+    location: { value: location },
+    'cache-control': { value: 'public, max-age=600' }
+  };
+  if (DIAGNOSTIC_HEADERS_ENABLED) {
+    headers['x-redirect-engine'] = { value: 'cloudfront-function' };
+  }
   return {
     statusCode: status,
     statusDescription: STATUS[status] || 'Redirect',
-    headers: {
-      location: { value: location },
-      'cache-control': { value: 'public, max-age=600' },
-      'x-redirect-engine': { value: 'cloudfront-function' }
-    }
+    headers: headers
   };
 }
 

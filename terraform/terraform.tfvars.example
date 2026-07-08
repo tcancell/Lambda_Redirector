@@ -1,5 +1,17 @@
 # Optional local overrides for Terraform.
 # Copy to terraform.tfvars if you want environment-specific values.
 
-redirect_cache_ttl_seconds = 600
+# Fallback redirects are safest uncached because fallback rules can depend on headers or method.
+redirect_cache_ttl_seconds = 0
+
+# Fast-path redirects do not invoke Lambda@Edge and can advertise client/proxy caching.
+fastpath_redirect_cache_ttl_seconds = 600
+
+# Strongly recommended for production: list every absolute redirect destination host.
+# Wildcards such as "*.example.edu" are supported.
+allowed_redirect_hosts = []
+
+# Enable only while troubleshooting; disabled by default to avoid exposing internals.
+enable_diagnostic_headers = false
+
 route53_zone_ids = {}

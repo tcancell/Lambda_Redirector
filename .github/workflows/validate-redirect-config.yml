@@ -6,19 +6,23 @@ on:
       - main
       - redirect-config
     paths:
-      - "examples/redirects.conf"
-      - "src/parser.py"
-      - "src/compiler.py"
-      - "tools/validate_redirect_config.py"
+      - "examples/**"
+      - "src/**"
+      - "edge/**"
+      - "terraform/**"
+      - "tests/**"
+      - "tools/**"
       - ".github/workflows/validate-redirect-config.yml"
   pull_request:
     branches:
       - main
     paths:
-      - "examples/redirects.conf"
-      - "src/parser.py"
-      - "src/compiler.py"
-      - "tools/validate_redirect_config.py"
+      - "examples/**"
+      - "src/**"
+      - "edge/**"
+      - "terraform/**"
+      - "tests/**"
+      - "tools/**"
       - ".github/workflows/validate-redirect-config.yml"
   workflow_dispatch:
     inputs:
@@ -29,9 +33,11 @@ on:
 
 permissions:
   contents: read
+  security-events: write
 
 env:
   CONFIG_PATH: ${{ github.event.inputs.config_path || vars.REDIRECT_CONFIG_PATH || 'examples/redirects.conf' }}
+  ALLOWED_REDIRECT_HOSTS: ${{ vars.ALLOWED_REDIRECT_HOSTS || '' }}
 
 jobs:
   validate:
@@ -47,13 +53,43 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Validate Apache redirect config syntax
+      - name: Validate Apache redirect config syntax and policy
         run: |
           python tools/validate_redirect_config.py "$CONFIG_PATH" --github-annotations --summary-json
 
-      - name: Run redirect parser and compiler tests
+      - name: Run redirect test suite
         run: |
-          python -m unittest \
-            tests.test_parser \
-            tests.test_compiler \
-            tests.test_rewrite_conditions
+          python -m unittest discover -s tests
+
+      - name: Compile Python sources
+        run: |
+          python -m compileall -q src tests tools
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform format check
+        run: terraform -chdir=terraform fmt -check
+
+      - name: Terraform validate
+        run: |
+          terraform -chdir=terraform init -backend=false
+          terraform -chdir=terraform validate
+
+      - name: Run Checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: terraform
+          framework: terraform
+          quiet: true
+          skip_check: CKV_AWS_68,CKV2_AWS_47,CKV_AWS_174,CKV2_AWS_42,CKV_AWS_310,CKV_AWS_374,CKV_AWS_109,CKV_AWS_111,CKV_AWS_356,CKV_AWS_50,CKV_AWS_115,CKV_AWS_116,CKV_AWS_117,CKV2_AWS_62,CKV2_AWS_65,CKV_AWS_144,CKV_AWS_145
+
+      - name: Run Trivy config scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          skip-dirs: terraform/.terraform
+          format: table

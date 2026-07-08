@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -13,6 +14,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from compiler import compile_text
 from parser import ConfigParseError
+from security import SecurityPolicy, SecurityValidationError
 
 
 def main() -> int:
@@ -28,12 +30,37 @@ def main() -> int:
         action="store_true",
         help="Print machine-readable compile summary JSON",
     )
+    parser.add_argument(
+        "--allowed-redirect-host",
+        action="append",
+        default=None,
+        help="Allowed absolute redirect destination host. Can be repeated. Defaults to ALLOWED_REDIRECT_HOSTS CSV.",
+    )
+    parser.add_argument(
+        "--allow-http-targets",
+        action="store_true",
+        help="Allow absolute http:// redirect targets. HTTPS is required by default.",
+    )
+    parser.add_argument(
+        "--max-config-bytes",
+        type=int,
+        default=int(os.environ.get("MAX_REDIRECT_CONFIG_BYTES", "262144")),
+        help="Maximum redirect config size in bytes.",
+    )
     args = parser.parse_args()
 
     try:
         text = args.config.read_text()
-        result = compile_text(text)
-    except ConfigParseError as exc:
+        allowed_hosts = args.allowed_redirect_host
+        if allowed_hosts is None:
+            allowed_hosts = os.environ.get("ALLOWED_REDIRECT_HOSTS", "")
+        policy = SecurityPolicy.from_values(
+            allowed_redirect_hosts=allowed_hosts,
+            require_https_redirect_targets=not args.allow_http_targets,
+            max_config_bytes=args.max_config_bytes,
+        )
+        result = compile_text(text, policy)
+    except (ConfigParseError, SecurityValidationError) as exc:
         if args.github_annotations:
             line = exc.line_number or 1
             print(f"::error file={args.config},line={line}::Invalid redirect config: {exc}")

@@ -10,6 +10,7 @@ from urllib.parse import unquote_plus
 import boto3
 
 from compiler import compile_text
+from security import SecurityPolicy
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -37,7 +38,12 @@ def _compile_and_sync(bucket: str, key: str, kvs_arn: str) -> dict[str, Any]:
     s3 = boto3.client("s3")
     response = s3.get_object(Bucket=bucket, Key=key)
     body = response["Body"].read().decode("utf-8")
-    compile_result = compile_text(body)
+    policy = SecurityPolicy.from_values(
+        allowed_redirect_hosts=os.environ.get("ALLOWED_REDIRECT_HOSTS", ""),
+        require_https_redirect_targets=os.environ.get("REQUIRE_HTTPS_REDIRECT_TARGETS", "true").lower() == "true",
+        max_config_bytes=int(os.environ.get("MAX_REDIRECT_CONFIG_BYTES", "262144")),
+    )
+    compile_result = compile_text(body, policy)
 
     kvs = boto3.client("cloudfront-keyvaluestore")
     existing_keys = _list_managed_keys(kvs, kvs_arn)

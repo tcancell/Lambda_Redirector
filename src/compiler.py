@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from parser import RedirectConfig, RedirectMatchRule, RedirectRule, RewriteCond, RewriteRule, Rule, parse_config
+from security import SecurityPolicy, validate_config_security, validate_config_size
 
 FASTPATH_VERSION = 1
 KVS_VALUE_LIMIT_BYTES = 1000
@@ -63,8 +64,13 @@ class CompileResult:
         }
 
 
-def compile_text(text: str) -> CompileResult:
-    return compile_config(parse_config(text))
+def compile_text(text: str, security_policy: SecurityPolicy | None = None) -> CompileResult:
+    if security_policy is not None:
+        validate_config_size(text, security_policy)
+    config = parse_config(text)
+    if security_policy is not None:
+        validate_config_security(config, security_policy)
+    return compile_config(config)
 
 
 def compile_config(config: RedirectConfig) -> CompileResult:

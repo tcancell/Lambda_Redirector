@@ -9,6 +9,7 @@ from email.utils import parsedate_to_datetime
 from typing import Any
 
 from parser import ConfigParseError, RedirectConfig, parse_config
+from security import SecurityPolicy, SecurityValidationError, validate_config_security, validate_config_size
 
 logger = logging.getLogger(__name__)
 
@@ -30,12 +31,14 @@ class S3ConfigLoader:
         region: str,
         check_interval_seconds: int = 30,
         s3_client: Any | None = None,
+        security_policy: SecurityPolicy | None = None,
     ) -> None:
         self.bucket = bucket
         self.key = key
         self.region = region
         self.check_interval_seconds = max(0, check_interval_seconds)
         self.s3 = s3_client or self._build_s3_client(region)
+        self.security_policy = security_policy or SecurityPolicy()
         self._config: RedirectConfig | None = None
         self._fingerprint: ObjectFingerprint | None = None
         self._next_check_at = 0.0
@@ -60,9 +63,11 @@ class S3ConfigLoader:
 
         try:
             body, loaded_fingerprint = self._get_config()
+            validate_config_size(body, self.security_policy)
             parsed = parse_config(body)
-        except ConfigParseError:
-            logger.exception("Redirect config parse failed; keeping previous known-good config")
+            validate_config_security(parsed, self.security_policy)
+        except (ConfigParseError, SecurityValidationError):
+            logger.exception("Redirect config validation failed; keeping previous known-good config")
             return self._config or RedirectConfig.empty()
         except Exception:
             logger.exception("Unable to load redirect config; keeping previous known-good config")

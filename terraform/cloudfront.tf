@@ -1,3 +1,8 @@
+resource "random_password" "edge_header_secret" {
+  length  = 32
+  special = false
+}
+
 resource "aws_cloudfront_origin_access_control" "fallback" {
   name                              = "${local.resource_prefix}-fallback-oac"
   description                       = "OAC for the redirect platform fallback S3 origin"
@@ -40,13 +45,49 @@ resource "aws_cloudfront_cache_policy" "redirect" {
   }
 }
 
+resource "aws_cloudfront_response_headers_policy" "security" {
+  name    = "${local.resource_prefix}-security-headers"
+  comment = "Security headers for fallback origin responses"
+
+  security_headers_config {
+    content_type_options {
+      override = true
+    }
+
+    frame_options {
+      frame_option = "DENY"
+      override     = true
+    }
+
+    referrer_policy {
+      referrer_policy = "no-referrer"
+      override        = true
+    }
+
+    strict_transport_security {
+      access_control_max_age_sec = 31536000
+      include_subdomains         = true
+      preload                    = true
+      override                   = true
+    }
+
+    xss_protection {
+      mode_block = true
+      protection = true
+      override   = true
+    }
+  }
+}
+
 resource "aws_cloudfront_function" "viewer_context" {
   name    = "${local.resource_prefix}-viewer-context"
   runtime = "cloudfront-js-2.0"
   comment = "Fast-path redirect evaluator backed by CloudFront KeyValueStore"
   publish = true
   code = templatefile("${path.module}/../edge/fast_path.js.tftpl", {
-    redirect_cache_seconds = var.redirect_cache_ttl_seconds
+    redirect_cache_seconds    = var.fastpath_redirect_cache_ttl_seconds
+    edge_header_secret        = random_password.edge_header_secret.result
+    enable_diagnostic_headers = var.enable_diagnostic_headers
   })
   key_value_store_associations = [aws_cloudfront_key_value_store.redirect_fastpath.arn]
 }
@@ -61,6 +102,12 @@ resource "aws_cloudfront_distribution" "redirect" {
   default_root_object = "index.html"
   tags                = local.common_tags
 
+  logging_config {
+    bucket          = aws_s3_bucket.logs.bucket_domain_name
+    include_cookies = false
+    prefix          = "cloudfront/"
+  }
+
   origin {
     domain_name              = aws_s3_bucket.fallback.bucket_regional_domain_name
     origin_id                = local.fallback_origin_id
@@ -72,10 +119,11 @@ resource "aws_cloudfront_distribution" "redirect" {
   }
 
   default_cache_behavior {
-    target_origin_id       = local.fallback_origin_id
-    viewer_protocol_policy = var.viewer_protocol_policy
-    cache_policy_id        = aws_cloudfront_cache_policy.redirect.id
-    compress               = false
+    target_origin_id           = local.fallback_origin_id
+    viewer_protocol_policy     = var.viewer_protocol_policy
+    cache_policy_id            = aws_cloudfront_cache_policy.redirect.id
+    response_headers_policy_id = aws_cloudfront_response_headers_policy.security.id
+    compress                   = false
 
     allowed_methods = [
       "DELETE",
@@ -126,6 +174,7 @@ resource "aws_cloudfront_distribution" "redirect" {
 
   viewer_certificate {
     cloudfront_default_certificate = true
+    minimum_protocol_version       = "TLSv1.2_2021"
   }
 
   lifecycle {
