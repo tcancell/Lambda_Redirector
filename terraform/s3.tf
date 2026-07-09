@@ -217,7 +217,7 @@ resource "aws_s3_object" "sample_config" {
   bucket                 = aws_s3_bucket.config.id
   key                    = var.config_key
   source                 = "${path.module}/../examples/redirects.conf"
-  etag                   = filemd5("${path.module}/../examples/redirects.conf")
+  source_hash            = filemd5("${path.module}/../examples/redirects.conf")
   content_type           = "text/plain; charset=utf-8"
   server_side_encryption = "aws:kms"
   kms_key_id             = aws_kms_key.regional.arn
