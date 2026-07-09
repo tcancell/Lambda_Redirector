@@ -385,6 +385,14 @@ The production defaults intentionally prefer safety over convenience:
 
 Checkov and Trivy are part of the CI gate. The documented scan exceptions cover items that are intentionally out of scope or incompatible with the service shape: WAF is excluded by request, Lambda@Edge does not support several Lambda controls, CloudFront custom certificates are console-managed, the log delivery bucket requires ACL/SSE-S3 behavior, and cross-region S3 replication/geographic restrictions are business-continuity choices rather than redirect-engine requirements.
 
+For local scans, use the helper script instead of installing Checkov into your global Python environment:
+
+```bash
+tools/run_security_scans.sh
+```
+
+The helper creates `.venv-checkov` and pins Checkov with its compatible `packaging` dependency. This avoids the common warning where Checkov requires `packaging<24.0` but another local tool upgraded `packaging` to a newer version.
+
 ## Updating Redirects
 
 Validate and inspect the fast/fallback split locally before opening a pull request:
