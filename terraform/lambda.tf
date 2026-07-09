@@ -85,29 +85,42 @@ resource "aws_lambda_function" "redirect_engine" {
 }
 
 
+resource "terraform_data" "config_compiler_package" {
+  input = {
+    compiler_handler = filesha256("${path.module}/../src/compiler_handler.py")
+    compiler         = filesha256("${path.module}/../src/compiler.py")
+    parser           = filesha256("${path.module}/../src/parser.py")
+    security         = filesha256("${path.module}/../src/security.py")
+    requirements     = filesha256("${path.module}/../requirements-config-compiler.txt")
+    always_rebuild   = timestamp()
+  }
+
+  provisioner "local-exec" {
+    interpreter = ["/bin/sh", "-c"]
+    environment = {
+      BUILD_DIR = "${path.module}/.build/config-compiler"
+      SRC_DIR   = "${path.module}/../src"
+      REQ_FILE  = "${path.module}/../requirements-config-compiler.txt"
+    }
+    command = <<-EOT
+      set -eu
+      rm -rf "$BUILD_DIR"
+      mkdir -p "$BUILD_DIR"
+      python3 -m pip install         --platform manylinux2014_x86_64         --implementation cp         --python-version 3.12         --only-binary=:all:         --target "$BUILD_DIR"         -r "$REQ_FILE"
+      cp "$SRC_DIR/compiler_handler.py" "$BUILD_DIR/compiler_handler.py"
+      cp "$SRC_DIR/compiler.py" "$BUILD_DIR/compiler.py"
+      cp "$SRC_DIR/parser.py" "$BUILD_DIR/parser.py"
+      cp "$SRC_DIR/security.py" "$BUILD_DIR/security.py"
+    EOT
+  }
+}
+
 data "archive_file" "config_compiler" {
   type        = "zip"
+  source_dir  = "${path.module}/.build/config-compiler"
   output_path = "${path.module}/${local.resource_prefix}-config-compiler.zip"
 
-  source {
-    filename = "compiler_handler.py"
-    content  = file("${path.module}/../src/compiler_handler.py")
-  }
-
-  source {
-    filename = "compiler.py"
-    content  = file("${path.module}/../src/compiler.py")
-  }
-
-  source {
-    filename = "parser.py"
-    content  = file("${path.module}/../src/parser.py")
-  }
-
-  source {
-    filename = "security.py"
-    content  = file("${path.module}/../src/security.py")
-  }
+  depends_on = [terraform_data.config_compiler_package]
 }
 
 resource "aws_cloudwatch_log_group" "config_compiler" {

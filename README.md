@@ -382,6 +382,7 @@ The production defaults intentionally prefer safety over convenience:
 - S3 buckets use public-access blocks, versioning, lifecycle rules, access logging, KMS encryption for application buckets, and explicit denies for insecure transport.
 - Lambda and compiler logs use KMS-encrypted CloudWatch log groups with 365-day retention by default.
 - The config compiler has reserved concurrency, X-Ray tracing, and an encrypted dead-letter queue.
+- The config compiler package includes `awscrt` because CloudFront KeyValueStore requires SigV4A signing through `botocore[crt]`; the Lambda runtime does not include that extra dependency by default. Terraform installs this compiler-only dependency while building the Lambda zip.
 
 Checkov and Trivy are part of the CI gate. The documented scan exceptions cover items that are intentionally out of scope or incompatible with the service shape: WAF is excluded by request, Lambda@Edge does not support several Lambda controls, CloudFront custom certificates are console-managed, the log delivery bucket requires ACL/SSE-S3 behavior, and cross-region S3 replication/geographic restrictions are business-continuity choices rather than redirect-engine requirements.
 

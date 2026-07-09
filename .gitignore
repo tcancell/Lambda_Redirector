@@ -8,3 +8,4 @@ __pycache__/
 terraform/*.tfvars
 !terraform/*.tfvars.example
 .venv-checkov/
+terraform/.build/
