@@ -275,6 +275,7 @@ The fallback cache key includes:
 - Request path
 - Query string
 - A trusted internal `x-redirect-host` value stamped by the CloudFront Function
+- A generated internal `x-redirect-edge-token` header that lets Lambda@Edge trust that host value
 
 Fallback redirect response caching defaults to disabled:
 
@@ -318,6 +319,17 @@ terraform -chdir=terraform output lambda_execution_role_name
 ```
 
 If the CloudFront behavior points at the wrong Lambda ARN, run `terraform apply` again and wait for the distribution to return to `Deployed`. Terraform will keep your console-managed aliases and certificate because `aliases` and `viewer_certificate` are ignored.
+
+## Troubleshooting No Redirect Rule Matched
+
+If every domain returns `No redirect rule matched this request.` even though the S3 config is correct, the fallback Lambda is probably not seeing the original visitor host. The CloudFront Function stamps two internal request headers before fallback:
+
+- `x-redirect-host`, containing the original domain
+- `x-redirect-edge-token`, containing a generated trust token
+
+Both headers must be forwarded to the origin-request Lambda through the CloudFront cache policy. Terraform manages this in `terraform/cloudfront.tf`. After changing this policy, run `terraform apply` and wait for the CloudFront distribution status to return to `Deployed`.
+
+You can temporarily set `enable_diagnostic_headers = true` while testing. Fast-path redirects return `x-redirect-engine: cloudfront-function`; fallback redirects return `x-redirect-engine: lambda-edge`.
 
 If the service-linked roles are missing, create them once in IAM or with these AWS CLI commands:
 

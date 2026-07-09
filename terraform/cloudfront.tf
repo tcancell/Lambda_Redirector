@@ -35,7 +35,7 @@ resource "aws_cloudfront_cache_policy" "redirect" {
       header_behavior = "whitelist"
 
       headers {
-        items = ["x-redirect-host"]
+        items = ["x-redirect-host", "x-redirect-edge-token"]
       }
     }
 
