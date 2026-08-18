@@ -90,7 +90,7 @@ Terraform does not manage CloudFront alternate domain names or viewer certificat
 ### Prerequisites
 
 - Terraform `1.5.0` or newer.
-- AWS CLI credentials with permission to manage S3, IAM, Lambda, CloudFront, CloudWatch Logs, KMS, SQS, CloudWatch alarms, and optionally Route 53.
+- AWS CLI credentials, or a Terraform Cloud execution role, with permission to manage S3, IAM, Lambda, CloudFront, CloudWatch Logs and CloudWatch Logs delivery APIs, AWS Glue, Athena, KMS, SQS, CloudWatch alarms, and optionally Route 53.
 - An ACM certificate in `us-east-1` if you plan to add custom domains to CloudFront in the AWS Console.
 - Route 53 hosted zone IDs if you want Terraform to create DNS records. Leave them out if you want to manage DNS manually.
 
