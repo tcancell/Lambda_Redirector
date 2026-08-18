@@ -50,6 +50,28 @@ locals {
   lambda_function_name = substr("${local.resource_prefix}-redirect-edge", 0, 64)
   fallback_origin_id   = "${local.resource_prefix}-fallback-s3"
 
+  analytics_database_name  = substr(replace("${local.resource_prefix}_analytics", "-", "_"), 0, 252)
+  analytics_workgroup_name = substr("${local.resource_prefix}-redirect-analytics", 0, 128)
+
+  cloudfront_v2_log_prefix = "cloudfront-v2"
+  cloudfront_v2_log_fields = [
+    "date",
+    "time",
+    "x-edge-location",
+    "c-ip",
+    "cs-method",
+    "cs(Host)",
+    "cs-uri-stem",
+    "sc-status",
+    "cs-uri-query",
+    "x-edge-result-type",
+    "x-edge-request-id",
+    "x-host-header",
+    "cs-protocol",
+    "time-taken",
+    "x-edge-detailed-result-type",
+  ]
+
   allowed_redirect_hosts_csv = join(",", var.allowed_redirect_hosts)
 
   common_tags = merge(

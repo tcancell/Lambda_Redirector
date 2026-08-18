@@ -102,10 +102,14 @@ resource "aws_cloudfront_distribution" "redirect" {
   default_root_object = "index.html"
   tags                = local.common_tags
 
-  logging_config {
-    bucket          = aws_s3_bucket.logs.bucket_domain_name
-    include_cookies = false
-    prefix          = "cloudfront/"
+  dynamic "logging_config" {
+    for_each = var.enable_legacy_cloudfront_access_logs ? [1] : []
+
+    content {
+      bucket          = aws_s3_bucket.logs.bucket_domain_name
+      include_cookies = false
+      prefix          = "cloudfront/"
+    }
   }
 
   origin {

@@ -48,3 +48,18 @@ output "config_compiler_lambda_name" {
   description = "S3-triggered Lambda function that compiles redirect config into CloudFront KeyValueStore."
   value       = aws_lambda_function.config_compiler.function_name
 }
+
+output "redirect_analytics_database_name" {
+  description = "Athena/Glue database containing CloudFront redirect request logs."
+  value       = try(aws_glue_catalog_database.redirect_analytics[0].name, null)
+}
+
+output "redirect_analytics_workgroup_name" {
+  description = "Athena workgroup with encrypted output and per-query cost controls for redirect analytics."
+  value       = try(aws_athena_workgroup.redirect_analytics[0].name, null)
+}
+
+output "redirect_access_logs_s3_uri" {
+  description = "S3 location of the partitioned CloudFront standard logging v2 Parquet files."
+  value       = var.enable_redirect_analytics ? "s3://${aws_s3_bucket.logs.bucket}/${local.cloudfront_v2_log_prefix}/" : null
+}

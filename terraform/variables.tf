@@ -192,9 +192,32 @@ variable "log_retention_days" {
 }
 
 variable "access_log_retention_days" {
-  description = "Retention period for S3 and CloudFront access logs."
+  description = "Retention period for S3, CloudFront, and Athena query-result logs."
   type        = number
   default     = 365
+}
+
+variable "enable_redirect_analytics" {
+  description = "Enable CloudFront standard logging v2, the Athena catalog, and saved redirect-usage queries."
+  type        = bool
+  default     = true
+}
+
+variable "enable_legacy_cloudfront_access_logs" {
+  description = "Continue delivering legacy CloudFront access logs while standard logging v2 is rolled out. Disable after verifying v2 delivery if duplicate raw logs are not needed."
+  type        = bool
+  default     = true
+}
+
+variable "analytics_query_bytes_scanned_cutoff" {
+  description = "Maximum bytes Athena can scan per redirect-analytics query. This limits accidental query cost."
+  type        = number
+  default     = 10737418240
+
+  validation {
+    condition     = var.analytics_query_bytes_scanned_cutoff > 0
+    error_message = "analytics_query_bytes_scanned_cutoff must be greater than zero."
+  }
 }
 
 variable "config_noncurrent_version_retention_days" {

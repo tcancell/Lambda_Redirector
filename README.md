@@ -131,6 +131,11 @@ allowed_redirect_hosts = [
 redirect_cache_ttl_seconds = 0
 fastpath_redirect_cache_ttl_seconds = 600
 
+# Store per-request redirect activity as partitioned Parquet and make it queryable in Athena.
+enable_redirect_analytics               = true
+analytics_query_bytes_scanned_cutoff    = 10737418240 # 10 GiB per query
+enable_legacy_cloudfront_access_logs    = true
+
 # Leave empty when DNS is managed manually in the AWS Console.
 route53_zone_ids = {}
 ```
@@ -170,6 +175,8 @@ Confirm that the plan includes:
 - One versioned S3 bucket for redirect configuration, encrypted with a customer-managed KMS key.
 - One private S3 bucket for CloudFront fallback origin content, encrypted with a customer-managed KMS key.
 - One S3 access log bucket for S3 and CloudFront logs.
+- CloudFront standard logging v2 delivered as privacy-minimized, partitioned Parquet files.
+- An Athena workgroup, Glue table, and saved URL-usage queries for redirect tracking.
 - An IAM role trusted by `lambda.amazonaws.com` and `edgelambda.amazonaws.com`.
 - A published Lambda version for Lambda@Edge.
 - A CloudFront distribution with access logging, security response headers, a viewer-request CloudFront Function fast path, and an origin-request Lambda@Edge fallback association.
@@ -192,6 +199,9 @@ terraform output config_bucket_name
 terraform output lambda_edge_qualified_arn
 terraform output fastpath_key_value_store_arn
 terraform output config_compiler_lambda_name
+terraform output redirect_analytics_database_name
+terraform output redirect_analytics_workgroup_name
+terraform output redirect_access_logs_s3_uri
 ```
 
 ### 6. Add Domains and Certificates in the AWS Console
@@ -218,6 +228,30 @@ curl -I \
 ```
 
 You should see the configured redirect status and a `Location` header.
+
+## Redirect Usage Analytics
+
+Terraform enables a separate CloudFront standard logging v2 delivery in addition to the existing legacy log stream. The v2 records are stored as Parquet under `cloudfront-v2/` in the private log bucket, partitioned by distribution, year, month, day, and hour. This design captures both the CloudFront Function fast path and the Lambda@Edge fallback because CloudFront records each viewer request after it is processed.
+
+The analytics stream deliberately excludes cookies, user agents, and referrers. It stores only the data needed to track redirect usage:
+
+- UTC date and time
+- viewer IP address (`c-ip`)
+- incoming host, request path, and query string, which Athena combines into the requested URL
+- HTTP method, response status, edge result, detailed result, request ID, edge location, and request duration
+
+After `terraform apply`, open Athena in the regional AWS Console and select the workgroup from `terraform output redirect_analytics_workgroup_name`. Select the database from `terraform output redirect_analytics_database_name`. Two saved queries are ready to run:
+
+- `Redirect request details (last 30 days)`: request time, full requested URL, viewer IP, redirect status, and CloudFront request ID.
+- `Redirect URL totals (last 30 days)`: the total number of requests for every exact incoming URL, the number that returned a redirect status, and first/last request time.
+
+The totals report counts full URLs, including query strings. To group only by host and path, remove the `cs_uri_query` expression from the saved query. To extend the reporting window, change `interval '30' day`; keep the `year` predicate so Athena can prune partitions. Query output is encrypted with SSE-S3 under `athena-results/` in the private log bucket, and the workgroup limits each query to 10 GiB by default. Adjust `analytics_query_bytes_scanned_cutoff` if your reporting window legitimately needs more data.
+
+CloudFront logging changes can take up to 12 hours to take effect. Leave `enable_legacy_cloudfront_access_logs = true` during this rollout so the original `cloudfront/` logs remain available. Once you have verified the v2 Parquet delivery and Athena queries, set it to `false` to stop duplicate legacy CloudFront logs. The S3 access logs for the config and fallback buckets remain enabled either way.
+
+The v2 stream begins collecting data after deployment; it does not migrate legacy log files into the Athena table. Terraform owns the v2 CloudWatch Logs delivery source for this distribution. Do not also create a v2 access-log source for the same distribution in the CloudFront console, because AWS allows only one source per distribution.
+
+The raw records contain IP addresses and complete query strings, which may be personal or sensitive data. Grant Athena, Glue, and S3 read access only to approved analysts, preferably through scoped IAM roles or Lake Formation. Terraform creates the catalog and workgroup but intentionally does not grant broad analyst access to the private log bucket.
 
 ### 8. Update Redirect Rules
 
@@ -381,6 +415,7 @@ The production defaults intentionally prefer safety over convenience:
 - CloudFront uses a generated internal token header so Lambda@Edge only trusts `x-redirect-host` when it was stamped by the CloudFront Function.
 - S3 buckets use public-access blocks, versioning, lifecycle rules, access logging, KMS encryption for application buckets, and explicit denies for insecure transport.
 - Lambda and compiler logs use KMS-encrypted CloudWatch log groups with 365-day retention by default.
+- Redirect analytics uses CloudFront standard logging v2 with a minimal field set, partitioned Parquet files, a private S3 bucket, a TLS-only bucket policy, encrypted Athena query output, and a per-query scan limit.
 - The config compiler has reserved concurrency, X-Ray tracing, and an encrypted dead-letter queue.
 - The config compiler package includes `awscrt` because CloudFront KeyValueStore requires SigV4A signing through `botocore[crt]`; the Lambda runtime does not include that extra dependency by default. Terraform installs this compiler-only dependency while building the Lambda zip.
 
